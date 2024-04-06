@@ -1,0 +1,456 @@
+---
+title: "Master"
+format: html
+  embed-resources: true
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+### Data cleaning, add fragility variables
+
+```{r}
+source("Scripts/01_cleandata.R")
+source("Scripts/02_fragility.R")
+
+library(rstatix) # Significance tests
+# library(parameters) # Boot-strapping
+library(ggsignif) # For significance brackets in our boxplots
+library(gtsummary)
+library(ggplot2)
+library(gt)
+library(gridExtra)
+
+mergedlm <- merged %>% filter(Outcome.Type == "primary" | Outcome.Type == "secondary")
+# For improved table reporting (Table 2, Linear Regression)
+mergedlm$Sample.Size <- mergedlm$Sample.Size/10
+mergedlm$FQ <- (mergedlm$FQ * 100)
+```
+
+### Significance Tests
+
+```{r}
+## Correlation coefficients
+cor.test(merged$Sample.Size, merged$FI, method="spearman")
+cor.test(merged$Journal.IF, merged$FI, method="spearman")
+
+cor.test(merged$Sample.Size, merged$FQ, method="spearman")
+cor.test(merged$Journal.IF, merged$FQ, method="spearman")
+
+# Comparing mean FI
+kruskal.test(FI ~ `Outcome Type`, merged)
+merged$Outcome_Type <- merged$`Outcome Type` # The dunn_test() function cannot handle spaces
+dunn_test(FI ~ Outcome_Type, data=merged, p.adjust.method = "holm")
+
+kruskal.test(FI ~ `Sample Size`, merged)
+merged$Sample_Size <- merged$`Sample Size`
+dunn_test(FI ~ Sample_Size, data=merged, p.adjust.method = "holm")
+
+kruskal.test(FI ~ `Journal Impact`, merged)
+
+kruskal.test(FI ~ `Comparison Group`, merged)
+
+kruskal.test(FI ~ `Medication Class`, merged)
+
+kruskal.test(FI ~ `Trial Blinding`, merged)
+
+kruskal.test(FI ~ `Significance`, merged)
+dunn_test(FI ~ Significance, data=merged, p.adjust.method = "holm")
+
+kruskal.test(FI ~ `Trial Phase`, merged)
+
+# Comparing mean FQ
+kruskal.test(FQ ~ `Outcome Type`, merged)
+dunn_test(FQ ~ Outcome_Type, data=merged, p.adjust.method = "holm")
+
+kruskal.test(FQ ~ `Sample Size`, merged)
+dunn_test(FQ ~ Sample_Size, data=merged, p.adjust.method = "holm")
+
+kruskal.test(FQ ~ `Journal Impact`, merged)
+
+kruskal.test(FQ ~ `Comparison Group`, merged)
+
+kruskal.test(FQ ~ `Medication Class`, merged)
+merged$Medication_Class <- merged$`Medication Class`
+dunn_test(FQ ~ Medication_Class, data=merged, p.adjust.method = "holm")
+# Not significant after adjusting for multiple tests
+
+kruskal.test(FQ ~ `Trial Blinding`, merged)
+merged$Trial_Blinding <- merged$`Trial Blinding`
+dunn_test(FQ ~ Trial_Blinding, data=merged, p.adjust.method = "holm")
+
+kruskal.test(FQ ~ `Significance`, merged)
+
+kruskal.test(FQ ~ `Trial Phase`, merged)
+merged$Trial_Phase <- merged$`Trial Phase`
+dunn_test(FQ ~ Trial_Phase, data=merged, p.adjust.method = "holm")
+```
+
+### Tables
+
+```{r}
+# Use - instead of , for CIs
+my_theme <-
+  list(
+    "pkgwide-str:ci.sep" = ", "
+  )
+
+set_gtsummary_theme(my_theme)
+
+## Table 1. Summarize Studies
+t_studies <- tbl_summary(studies, 
+                         include=c(Sample.Size, Lost.Fu.Pct, Lost.Fu.Unknown,
+                                   Med.Class, Control.Arm, Study.Phase, Blinding, 
+                                   Journal.IF, Journal, Num.Outcomes),
+                         sort = all_categorical() ~ "frequency",
+                         label = list(Num.Outcomes = "Binary Outcomes per Study", 
+                                      Publication.Year = "Year of Publication", 
+                                      Sample.Size = "Sample Size", 
+                                      Control.Arm = "Control Arm Presence", 
+                                      Lost.Fu.Pct = "Percent Lost to Follow-up", 
+                                      Lost.Fu.Unknown = "Lost to Follow-up Not Reported",
+                                      Study.Phase = "Study Phase", 
+                                      Med.Class = "Medication Class", 
+                                      Blinding = "Blinding", 
+                                      Journal.IF = "Journal Impact Factor", 
+                                      Journal = "Top 10 Journals"),
+                         missing = "no") %>% bold_labels() 
+
+t_outcomes <- tbl_summary(mergedlm, 
+                          include = c(FI, FQ, Outcome.Type, Outcome.Test, Significance),
+                          sort = all_categorical() ~ "frequency",
+                          label = list(FI = "Fragility Index",
+                                       FQ = "Fragility Quotient",
+                                       Outcome.Type = "Outcome Type",
+                                       Outcome.Test = "Test Statistic",
+                                       Significance = "Reported Significance"),
+                          missing = "no") %>% bold_labels()
+
+tbl_stack(list(t_studies, t_outcomes)) %>% as_gt() %>% gtsave("Output/Table 1 Studies.docx")
+
+## Table 2. Stratification Variables
+FIt2 <- tbl_continuous(
+  mergedlm, #%>% filter(!Outcome.Type == "adverse event"),
+  include = c(`Outcome Type`, `Sample Size`, `Journal Impact`, `Comparison Group`, 
+              `Medication Class`, `Trial Blinding`, `Significance`, `Trial Phase`),
+  variable = FI) %>% add_p() %>% bold_p()
+
+FQt2 <- tbl_continuous(
+  mergedlm, #%>% filter(!Outcome.Type == "adverse event"),
+  include = c(`Outcome Type`, `Sample Size`, `Journal Impact`, `Comparison Group`, 
+              `Medication Class`, `Trial Blinding`, `Significance`, `Trial Phase`),
+  variable = FQ) %>% add_p() %>% bold_p()
+
+tbl_merge(list(FIt2, FQt2)) %>% bold_labels() %>% 
+  as_gt() %>% gtsave("Output/Table 2 Strat_efficacy.docx")
+```
+
+### Plots
+
+```{r}
+## Histogram
+hist <- ggplot(merged, aes(x = FI)) + 
+  geom_histogram(binwidth = 1, color = "black", fill = "#3498db") +
+  theme_classic() + 
+  labs(title = "Fragility Index (FI) Distribution", x = "FI", y = "Count") +
+  scale_x_continuous(breaks = seq(0, 80, by = 10), limits = c(0, 80)) + 
+  geom_vline(aes(xintercept = median(FI, na.rm = TRUE)), 
+             linetype = "dashed", color = "gray", size = 0.5)
+
+hist_in <- ggplot(merged, aes(x = FI)) + 
+  geom_histogram(binwidth = 1, color = "black", fill = "#3498db") +
+  theme_classic() + 
+  labs(x = NULL, y = NULL) +
+  scale_x_continuous(breaks = seq(0, 20, by = 2), limits = c(0, 20)) +
+  scale_y_continuous(limits = c(0, 50)) # Adjust Y limits if needed
+
+## Scatterplot
+scatter <- ggplot(merged, aes())
+
+## Box Plots
+# Function to create a boxplot for a given outcome and stratifying variable
+plot_boxplot <- function(data, outcome, strat_var) {
+  ggplot(data, aes_string(x = strat_var, y = outcome)) + 
+    geom_boxplot(outlier.shape = NA) +
+    labs(title = paste(outcome, "by", strat_var),
+         x = strat_var,
+         y = outcome)
+}
+
+# List of outcomes and stratifying variables
+target_outcomes <- c("FI", "FQ")
+strat_vars <- c("`Outcome Type`", "`Sample Size`", "`Journal Impact`", "`Comparison Group`", 
+                "`Medication Class`", "`Trial Blinding`", "`Significance`", "`Trial Phase`")
+
+# Initialize an empty list to store the plots
+plots_list <- list()
+
+# Iterate over each combination of outcome and stratifying variable
+for (outcome in target_outcomes) {
+  for (strat_var in strat_vars) {
+    # Create a unique name for each plot
+    plot_name <- paste("p", strat_var, outcome, sep = "_")
+    
+    # Assign the plot to the list using the unique name
+    plots_list[[plot_name]] <- plot_boxplot(merged, outcome, strat_var)
+  }
+}
+
+names(plots_list) <- c(
+  "p_OutcomeType_FI", "p_SampleSize_FI", "p_JournalImpact_FI",
+  "p_ComparisonGroup_FI", "p_MedicationClass_FI", "p_TrialBlinding_FI",
+  "p_Significance_FI", "p_TrialPhase_FI", "p_OutcomeType_FQ",
+  "p_SampleSize_FQ", "p_JournalImpact_FQ", "p_ComparisonGroup_FQ",
+  "p_MedicationClass_FQ", "p_TrialBlinding_FQ", "p_Significance_FQ",
+  "p_TrialPhase_FQ"
+)
+
+# Function to update each plot
+update_plot <- function(plot) {
+  plot + 
+    geom_boxplot(fill = "#3498db", color = "black", outlier.shape = NA) +
+    theme_bw() +
+    theme(
+      panel.grid.major.x = element_blank(), 
+      panel.grid.minor.x = element_blank()
+    ) +
+    labs(
+      title = gsub("`", "", plot$labels$title, fixed = TRUE),
+      x = gsub("`", "", plot$labels$x, fixed = TRUE),
+      y = plot$labels$y
+    )
+}
+
+# Apply the function to each plot in the list
+plots_list <- lapply(plots_list, update_plot)
+
+# More narrow y-lim for fragility index plots
+for (plot_name in names(plots_list)) {
+  if (grepl("_FI$", plot_name)) {
+    # Modify the plot by setting the y-limits and replace it in the list
+    plots_list[[plot_name]] <- plots_list[[plot_name]] + ylim(0, 20)
+  }
+}
+
+# Arrange in one figure
+for(i in 1:length(plots_list)) {
+  assign(paste("p", i, sep=""), plots_list[[i]])
+}
+
+p1 <- p1 + labs(title = NULL)
+p2 <- p2 + labs(title = NULL, y = NULL)
+p3 <- p3 + labs(title = NULL, y = NULL)
+p4 <- p4 + labs(title = NULL, y = NULL)
+p5 <- p5 + labs(title = NULL)  
+p6 <- p6 + labs(title = NULL, y = NULL)
+p7 <- p7 + labs(title = NULL, y = NULL)
+p8 <- p8 + labs(title = NULL, y = NULL)
+
+p1 <- p1 + geom_signif(
+  y_position = c(9.75, 12.5), xmin = c(1, 1), xmax = c(2, 3),
+  annotation = c("*", "**"), tip_length = .0025
+)
+
+p2 <- p2 + geom_signif(
+  y_position = c(15.75, 17.75), xmin = c(1, 1), xmax = c(2, 3),
+  annotation = c("***", "***"), tip_length = .0025
+)
+  
+p7 <- p7 + geom_signif(
+  y_position = 18, xmin = 1, xmax = 2,
+  annotation = "*", tip_length = .0025
+)
+
+grid.arrange(p1, p2, p3, p4, 
+             p5, p6, p7, p8,
+             nrow = 2, ncol = 4,
+             top = "Fragility Index (FI)")
+
+p9 <- p9 + labs(title = NULL)
+p10 <- p10 + labs(title = NULL, y = NULL)
+p11 <- p11 + labs(title = NULL, y = NULL)
+p12 <- p12 + labs(title = NULL, y = NULL)
+p13 <- p13 + labs(title = NULL)  
+p14 <- p14 + labs(title = NULL, y = NULL)
+p15 <- p15 + labs(title = NULL, y = NULL)
+p16 <- p16 + labs(title = NULL, y = NULL)
+
+p9 <- p9 + geom_signif(
+  y_position = c(15.5, 15.5), xmin = c(1.05, 2.05), xmax = c(1.95, 2.95),
+  annotation = c("**", "**"), tip_length = .0025
+)
+
+p10 <- p10 + geom_signif(
+  y_position = c(17, 16), xmin = c(1.05, 2.05), xmax = c(2.95, 2.95),
+  annotation = c("***", "***"), tip_length = .0025
+)
+
+p14 <- p14 + geom_signif(
+  y_position = c(10.5, 13.75, 15.75),
+  xmin = c(2, 2, 1), xmax = c(3, 4, 4),
+  annotation = c("*", "**", "**"), tip_length = .0025
+)
+
+p16 <- p16 + geom_signif(
+  y_position = c(14, 15.5),
+  xmin = c(1, 1), xmax = c(2, 3),
+  annotation = c("**", "***"), tip_length = .0025
+)
+
+grid.arrange(p9, p10, p11, p12, 
+             p13, p14, p15, p16,
+             nrow = 2, ncol = 4,
+             top = "Fragility Quotient (FQ)")
+
+## Correlation plots
+# Creating the scatter plot with ggplot
+# scatter1 <- ggplot(merged, aes(x = Sample.Size, y = FI, color = Significance)) +
+#   geom_point() +  # Add scatter points
+#   ggtitle("Fragility Index (FI) vs Sample Size") +
+#   xlab("Sample Size") +
+#   ylab("FI") +
+#   scale_color_manual(values = c("Significant" = "#3498db", "Non-Significant" = "#e74c3c")) + 
+#   scale_x_continuous(breaks = seq(0,1250, by=250), limits=c(0,1250)) +
+#   annotate("text", x = max(merged$Sample.Size) * 0.9, y = max(merged$FI) * 0.95, 
+#            label = "Spearman's rho: 0.31", color = "black") +
+#   theme_minimal() + theme(axis.line.x = element_line(color = "black", linewidth = 0.5),  
+#                           axis.line.y = element_line(color = "black", linewidth = 0.5))
+# 
+# scatter2 <- ggplot(merged, aes(x = Sample.Size, y = FQ, color = Significance)) +
+#   geom_point() +  # Add scatter points
+#   ggtitle("Fragility Quotient (FQ) vs Sample Size") +
+#   xlab("Sample Size") +
+#   ylab("FQ") +
+#   scale_color_manual(values = c("Significant" = "#3498db", "Non-Significant" = "#e74c3c")) +
+#   scale_x_continuous(breaks = seq(0,1250, by=250), limits=c(0,1250)) +
+#   annotate("text", x = max(merged$Sample.Size) * 0.9, y = max(merged$FQ) * 0.95, 
+#            label = "Spearman's rho: -0.69", color = "black") +
+#   theme_minimal() + theme(axis.line.x = element_line(color = "black", linewidth = 0.5),  
+#                           axis.line.y = element_line(color = "black", linewidth = 0.5))
+```
+
+### Linear Regression
+
+```{r}
+# Fragility Index
+FImod_Outcome.Type <- lm(formula = FI ~ `Outcome Type`, data = mergedlm)
+FImod_Sample.Size <- lm(formula = FI ~ Sample.Size, data = mergedlm)
+FImod_Journal.IF <- lm(formula = FI ~ Journal.IF, data = mergedlm)
+FImod_Lost.Fu <- lm(formula = FI ~ Lost.Fu.Pct, data = mergedlm)
+FImod_Control.Arm <- lm(formula = FI ~ `Comparison Group`, data = mergedlm) 
+FImod_Med.Class <- lm(formula = FI ~ `Medication Class`, data = mergedlm)
+FImod_Blinding <- lm(formula = FI ~ `Trial Blinding`, data = mergedlm)
+FImod_Significance <- lm(formula = FI ~ Significance, data = mergedlm)
+FImod_Study.Phase <- lm(formula = FI ~ `Trial Phase`, data = mergedlm)
+FImod_Num.Outcomes <- lm(formula = FI ~ Num.Outcomes, data = mergedlm)
+
+# Fragility Quotient
+FQmod_Outcome.Type <- lm(formula = FQ ~ `Outcome Type`, data = mergedlm)
+FQmod_Sample.Size <- lm(formula = FQ ~ Sample.Size, data = mergedlm)
+FQmod_Journal.IF <- lm(formula = FQ ~ Journal.IF, data = mergedlm)
+FQmod_Lost.Fu <- lm(formula = FQ ~ Lost.Fu.Pct, data = mergedlm)
+FQmod_Control.Arm <- lm(formula = FQ ~ `Comparison Group`, data = mergedlm)
+FQmod_Med.Class <- lm(formula = FQ ~ `Medication Class`, data = mergedlm)
+FQmod_Blinding <- lm(formula = FQ ~ `Trial Blinding`, data = mergedlm)
+FQmod_Significance <- lm(formula = FQ ~ Significance, data = mergedlm)
+FQmod_Study.Phase <- lm(formula = FQ ~ `Trial Phase`, data = mergedlm)
+FQmod_Num.Outcomes <- lm(formula = FQ ~ Num.Outcomes, data = mergedlm)
+
+# Tables
+t1_FI <- FImod_Sample.Size %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t2_FI <- FImod_Num.Outcomes %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t3_FI <- FImod_Journal.IF %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t4_FI <- FImod_Lost.Fu %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t5_FI <- FImod_Significance %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t6_FI <- FImod_Outcome.Type %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t7_FI <- FImod_Med.Class %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t8_FI <- FImod_Study.Phase %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t9_FI <- FImod_Blinding %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t10_FI <- FImod_Control.Arm %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t_FI <- tbl_stack(list(t1_FI, t2_FI, t3_FI, t4_FI, t5_FI,
+                       t6_FI, t7_FI, t8_FI, t9_FI, t10_FI)) %>% bold_p()
+
+t1_FQ <- FQmod_Sample.Size %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t2_FQ <- FQmod_Num.Outcomes %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t3_FQ <- FQmod_Journal.IF %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t4_FQ <- FQmod_Lost.Fu %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t5_FQ <- FQmod_Significance %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t6_FQ <- FQmod_Outcome.Type %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t7_FQ <- FQmod_Med.Class %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t8_FQ <- FQmod_Study.Phase %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t9_FQ <- FQmod_Blinding %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t10_FQ <- FQmod_Control.Arm %>% tbl_regression() %>% bold_labels() %>% 
+  modify_column_merge(pattern = "{estimate} ({ci})", rows = !is.na(estimate))
+t_FQ <- tbl_stack(list(t1_FQ, t2_FQ, t3_FQ, t4_FQ, t5_FQ,
+                       t6_FQ, t7_FQ, t8_FQ, t9_FQ, t10_FQ)) %>% bold_p()
+
+tbl_merge(list(t_FI, t_FQ)) %>% as_gt() %>% gtsave("Output/Table 3 Linear Reg.docx")
+rm(t1_FI, t2_FI, t3_FI, t4_FI, t5_FI, t6_FI, t7_FI, t8_FI, t9_FI, t10_FI,
+   t1_FQ, t2_FQ, t3_FQ, t4_FQ, t5_FQ, t6_FQ, t7_FQ, t8_FQ, t9_FQ, t10_FQ,
+   t_FI, t_FQ,
+   FImod_Outcome.Type, FImod_Sample.Size, FImod_Journal.IF, FImod_Lost.Fu, FImod_Control.Arm,
+   FImod_Med.Class, FImod_Blinding, FImod_Significance, FImod_Study.Phase, FImod_Num.Outcomes,
+   FQmod_Outcome.Type, FQmod_Sample.Size, FQmod_Journal.IF, FQmod_Lost.Fu, FQmod_Control.Arm,
+   FQmod_Med.Class, FQmod_Blinding, FQmod_Significance, FQmod_Study.Phase, FQmod_Num.Outcomes)
+
+# Need to manually insert these bootstrapped estimates into the output table
+# bootstrap_parameters(mod, iterations = 1000)
+# model_parameters(FImod_Outcome.Type, bootstrap = TRUE, iterations = 1000)
+```
+
+
+### Testing
+```{r}
+ggplot(merged, aes(FI)) + 
+  geom_density() + 
+  stat_function(
+    fun = dnorm, 
+    args = list(mean = mean(merged$FI, na.rm = TRUE), 
+                sd = sd(merged$FI, na.rm = TRUE)), colour = "red") + 
+  labs(title = "Normal Density plot of FI")
+
+ggplot(merged, aes(sample = FI)) + stat_qq() + stat_qq_line(col = "red") + labs(title = "Q-Q plot of FI")
+
+ggplot(merged, aes(FQ)) + 
+  geom_density() + 
+  stat_function(
+    fun = dnorm, 
+    args = list(mean = mean(merged$FQ, na.rm = TRUE), 
+                sd = sd(merged$FQ, na.rm = TRUE)), colour = "red") + 
+  labs(title = "Normal Density plot of FQ")
+
+residuals <- data.frame(resid(FQmod_Med.Class))
+ggplot(data = residuals, aes(x = resid.FQmod_Med.Class.)) + geom_density() + 
+  stat_function(fun = dnorm, args = list(mean = mean(residuals$resid.FQmod_Med.Class., na.rm = TRUE), 
+                                         sd = sd(residuals$resid.FQmod_Med.Class., na.rm = TRUE)), colour = "red")
+
+# Bootstrap CI for the association coefficient
+library(boot)
+set.seed(123)
+boot.out <- boot(merged, function(data, indices) {
+  data <- data[indices, ] # allows bootstrapping
+  fit <- lm(FI ~ Sample.Size, data = data)
+  return(coef(fit))
+}, R = 1000)
+boot.ci(boot.out, type="bca", index = 1) # intercept  
+boot.ci(boot.out, type="bca", index = 2) # codon90 coefficient
+```
